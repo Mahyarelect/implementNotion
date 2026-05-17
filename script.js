@@ -109,10 +109,11 @@
 
   function parseInline(text) {
     let escaped = escapeHtml(text);
-    
+
     // 1. Color syntax: {color:red}text{/color}
     escaped = escaped.replace(/\{color:([^}]+)\}(.*?)\{\/color\}/g, (match, color, inner) => {
-      return `<span style="color:${color};">${parseInline(inner)}</span>`;
+      const safeColor = sanitizeColorValue(color);
+      return `<span style="color:${safeColor};">${parseInline(inner)}</span>`;
     });
 
     // 2. Underline: ++text++
@@ -127,9 +128,36 @@
     // Inline code
     escaped = escaped.replace(/`(.*?)`/g, '<code>$1</code>');
     // Links [text](url)
-    escaped = escaped.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+    escaped = escaped.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, url) => {
+      const safeUrl = sanitizeUrl(url);
+      if (!safeUrl) return label;
+      return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    });
     
     return escaped;
+  }
+
+
+
+  function sanitizeColorValue(color) {
+    const raw = String(color || '').trim();
+    if (/^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(raw)) return raw;
+    if (/^(rgb|hsl)a?\(\s*[\d.%\s,]+\)$/i.test(raw)) return raw;
+    if (/^[a-zA-Z]{3,20}$/.test(raw)) return raw;
+    return 'inherit';
+  }
+
+  function sanitizeUrl(url) {
+    const raw = String(url || '').trim();
+    if (!raw) return null;
+    try {
+      const parsed = new URL(raw, window.location.origin);
+      const allowedProtocols = ['http:', 'https:', 'mailto:', 'tel:'];
+      if (!allowedProtocols.includes(parsed.protocol)) return null;
+      return escapeHtml(parsed.href);
+    } catch (e) {
+      return null;
+    }
   }
 
   function escapeHtml(text) {
@@ -138,6 +166,37 @@
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+
+
+  function isValidImportedData(imported) {
+    if (!imported || typeof imported !== 'object' || !Array.isArray(imported.folders)) {
+      return false;
+    }
+
+    return imported.folders.every(isValidFolder);
+  }
+
+  function isValidFolder(folder) {
+    if (!folder || typeof folder !== 'object') return false;
+    if (typeof folder.id !== 'string' || typeof folder.name !== 'string') return false;
+    if (!Array.isArray(folder.notes)) return false;
+    return folder.notes.every(note => isValidNote(note, folder.id));
+  }
+
+  function isValidNote(note, folderId) {
+    if (!note || typeof note !== 'object') return false;
+    const requiredStrings = ['id', 'title', 'content', 'folderId', 'createdAt', 'updatedAt'];
+    for (const key of requiredStrings) {
+      if (typeof note[key] !== 'string') return false;
+    }
+    if (typeof note.pinned !== 'boolean') return false;
+    if (note.folderId !== folderId) return false;
+    if (Number.isNaN(Date.parse(note.createdAt)) || Number.isNaN(Date.parse(note.updatedAt))) {
+      return false;
+    }
+    return true;
   }
 
   // ---------- Note & Folder Operations ----------
@@ -556,7 +615,7 @@
       reader.onload = (ev) => {
         try {
           const imported = JSON.parse(ev.target.result);
-          if (imported.folders && Array.isArray(imported.folders)) {
+          if (isValidImportedData(imported)) {
             data = imported;
             saveData();
             currentNoteId = null;
