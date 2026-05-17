@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>یادداشت‌های من</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <h2>📒 یادداشت‌های من</h2>
+        <button class="icon-btn menu-toggle" id="closeSidebarBtn">✕</button>
+      </div>
+      <div class="sidebar-controls">
+        <button id="newNoteBtn">+ یادداشت</button>
+        <button id="newFolderBtn">📁 پوشه جدید</button>
+        <select id="sortSelect">
+          <option value="title">مرتب‌سازی بر اساس عنوان</option>
+          <option value="date">مرتب‌سازی بر اساس تاریخ</option>
+        </select>
+      </div>
+      <input type="text" class="search-box" id="searchInput" placeholder="جستجو در یادداشت‌ها...">
+      <div class="pinned-section" id="pinnedSection">
+        <div class="section-title">📌 پین شده</div>
+        <div id="pinnedList"></div>
+      </div>
+      <div class="folders-section" id="foldersSection">
+        <div class="section-title">📂 پوشه‌ها</div>
+        <div id="foldersList"></div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main" id="mainContent">
+      <button class="menu-toggle" id="openSidebarBtn" style="display:none;">☰ منو</button>
+      <div class="main-top-bar" id="noteEditor" style="display:none;">
+        <input type="text" class="note-title-input" id="noteTitle" placeholder="عنوان یادداشت...">
+        <div class="actions">
+          <select id="folderSelect"></select>
+          <button id="pinBtn">📌 پین</button>
+          <button id="deleteNoteBtn">🗑 حذف</button>
+          <button id="exportBtn">⬇️ خروجی JSON</button>
+          <input type="file" id="importFile" accept=".json" style="display:none;">
+          <button id="importBtn">⬆️ ورودی JSON</button>
+          <button id="darkModeToggle">🌓 حالت تاریک</button>
+        </div>
+      </div>
+      <div id="emptyState" class="empty-state">یک یادداشت انتخاب کنید یا یادداشت جدیدی بسازید.</div>
+      <div id="editorContainer" class="editor-container" style="display:none;">
+        <div class="editor-pane">
+          <div class="pane-header">ویرایش مارک‌داون</div>
+          <!-- نوار ابزار کامل -->
+          <div class="formatting-toolbar">
+            <button id="boldBtn" title="ضخیم (Bold)"><strong>B</strong></button>
+            <button id="italicBtn" title="کج (Italic)"><em>I</em></button>
+            <button id="underlineBtn" title="زیرخط‌دار (Underline)"><u>U</u></button>
+            <input type="color" id="colorPicker" value="#ff0000" title="انتخاب رنگ">
+            <button id="applyColorBtn">🎨 اعمال رنگ</button>
+            <span class="separator">|</span>
+            <button id="h1Btn" title="سرتیتر ۱">H1</button>
+            <button id="h2Btn" title="سرتیتر ۲">H2</button>
+            <button id="ulBtn" title="لیست بدون شماره">• لیست</button>
+            <button id="olBtn" title="لیست شماره‌دار">۱. لیست</button>
+          </div>
+          <textarea id="noteContent" placeholder="محتوای خود را با مارک‌داون بنویسید..."></textarea>
+        </div>
+        <div class="preview-pane">
+          <div class="pane-header">پیش‌نمایش</div>
+          <div class="preview-content" id="previewContent"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="script.js" defer></script>
+</body>
+</html>
