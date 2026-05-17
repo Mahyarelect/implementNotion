@@ -12,69 +12,81 @@
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
         <h2>📒 یادداشت‌های من</h2>
-        <button class="icon-btn menu-toggle" id="closeSidebarBtn">✕</button>
+        <button class="icon-btn sidebar-close" id="closeSidebarBtn" type="button" aria-label="بستن منو">✕</button>
       </div>
+
       <div class="sidebar-controls">
-        <button id="newNoteBtn">+ یادداشت</button>
-        <button id="newFolderBtn">📁 پوشه جدید</button>
-        <select id="sortSelect">
+        <button id="newNoteBtn" type="button">+ یادداشت</button>
+        <button id="newFolderBtn" type="button">📁 پوشه جدید</button>
+        <select id="sortSelect" aria-label="مرتب‌سازی یادداشت‌ها">
           <option value="title">مرتب‌سازی بر اساس عنوان</option>
-          <option value="date">مرتب‌سازی بر اساس تاریخ</option>
+          <option value="updated">مرتب‌سازی بر اساس ویرایش</option>
+          <option value="created">مرتب‌سازی بر اساس ایجاد</option>
         </select>
       </div>
-      <input type="text" class="search-box" id="searchInput" placeholder="جستجو در یادداشت‌ها...">
-      <div class="pinned-section" id="pinnedSection">
+
+      <input type="text" class="search-box" id="searchInput" placeholder="جستجو در عنوان یا محتوا...">
+
+      <div class="pinned-section">
         <div class="section-title">📌 پین شده</div>
         <div id="pinnedList"></div>
       </div>
-      <div class="folders-section" id="foldersSection">
+
+      <div class="folders-section">
         <div class="section-title">📂 پوشه‌ها</div>
         <div id="foldersList"></div>
       </div>
     </aside>
 
-    <!-- Main Content -->
+    <!-- Main -->
     <main class="main" id="mainContent">
-      <button class="menu-toggle" id="openSidebarBtn" style="display:none;">☰ منو</button>
-      <div class="main-top-bar" id="noteEditor" style="display:none;">
+      <button class="menu-toggle" id="openSidebarBtn" type="button">☰ منو</button>
+
+      <div class="main-top-bar" id="noteEditor" hidden>
         <input type="text" class="note-title-input" id="noteTitle" placeholder="عنوان یادداشت...">
         <div class="actions">
-          <select id="folderSelect"></select>
-          <button id="pinBtn">📌 پین</button>
-          <button id="deleteNoteBtn">🗑 حذف</button>
-          <button id="exportBtn">⬇️ خروجی JSON</button>
-          <input type="file" id="importFile" accept=".json" style="display:none;">
-          <button id="importBtn">⬆️ ورودی JSON</button>
-          <button id="darkModeToggle">🌓 حالت تاریک</button>
+          <select id="folderSelect" aria-label="انتخاب پوشه"></select>
+          <button id="pinBtn" type="button">📌 پین</button>
+          <button id="deleteNoteBtn" type="button">🗑 حذف</button>
+          <button id="exportBtn" type="button">⬇️ خروجی JSON</button>
+          <input type="file" id="importFile" accept=".json,application/json" hidden>
+          <button id="importBtn" type="button">⬆️ ورودی JSON</button>
+          <button id="darkModeToggle" type="button">🌓 حالت تاریک</button>
         </div>
       </div>
+
       <div id="emptyState" class="empty-state">یک یادداشت انتخاب کنید یا یادداشت جدیدی بسازید.</div>
-      <div id="editorContainer" class="editor-container" style="display:none;">
-        <div class="editor-pane">
+
+      <div id="editorContainer" class="editor-container" hidden>
+        <section class="editor-pane">
           <div class="pane-header">ویرایش مارک‌داون</div>
-          <!-- نوار ابزار کامل -->
           <div class="formatting-toolbar">
-            <button id="boldBtn" title="ضخیم (Bold)"><strong>B</strong></button>
-            <button id="italicBtn" title="کج (Italic)"><em>I</em></button>
-            <button id="underlineBtn" title="زیرخط‌دار (Underline)"><u>U</u></button>
-            <input type="color" id="colorPicker" value="#ff0000" title="انتخاب رنگ">
-            <button id="applyColorBtn">🎨 اعمال رنگ</button>
+            <button id="boldBtn" type="button" title="ضخیم"><strong>B</strong></button>
+            <button id="italicBtn" type="button" title="کج"><em>I</em></button>
+            <button id="underlineBtn" type="button" title="زیرخط"><u>U</u></button>
+            <input type="color" id="colorPicker" value="#d93025" title="انتخاب رنگ">
+            <button id="applyColorBtn" type="button">🎨 رنگ</button>
             <span class="separator">|</span>
-            <button id="h1Btn" title="سرتیتر ۱">H1</button>
-            <button id="h2Btn" title="سرتیتر ۲">H2</button>
-            <button id="ulBtn" title="لیست بدون شماره">• لیست</button>
-            <button id="olBtn" title="لیست شماره‌دار">۱. لیست</button>
+            <button id="h1Btn" type="button">H1</button>
+            <button id="h2Btn" type="button">H2</button>
+            <button id="h3Btn" type="button">H3</button>
+            <button id="ulBtn" type="button">• لیست</button>
+            <button id="olBtn" type="button">۱. لیست</button>
+            <button id="codeBtn" type="button">کد</button>
+            <button id="linkBtn" type="button">لینک</button>
           </div>
           <textarea id="noteContent" placeholder="محتوای خود را با مارک‌داون بنویسید..."></textarea>
-        </div>
-        <div class="preview-pane">
+        </section>
+
+        <section class="preview-pane">
           <div class="pane-header">پیش‌نمایش</div>
           <div class="preview-content" id="previewContent"></div>
-        </div>
+        </section>
       </div>
     </main>
   </div>
 
+  <div class="overlay" id="sidebarOverlay"></div>
   <script src="script.js" defer></script>
 </body>
 </html>

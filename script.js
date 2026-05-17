@@ -1,674 +1,597 @@
-(function() {
-  // ---------- Data Model ----------
-  let data = {
-    folders: [] // { id, name, notes: [ {...} ] }
-  };
+(function () {
+  'use strict';
 
+  /* State */
+  const storageKey = 'notionCloneData';
+  const darkModeKey = 'darkMode';
+  let data = { folders: [] };
   let currentNoteId = null;
   let searchQuery = '';
   let sortMode = 'title';
-  let darkMode = false;
+  let saveTimer = null;
 
-  // ---------- Utility Functions ----------
-  function generateId() {
-    return Date.now().toString(36) + Math.random().toString(36).substr(2);
+  /* Elements */
+  const $ = (id) => document.getElementById(id);
+  const elements = {};
+
+  function cacheElements() {
+    [
+      'sidebar', 'sidebarOverlay', 'openSidebarBtn', 'closeSidebarBtn', 'newNoteBtn', 'newFolderBtn',
+      'sortSelect', 'searchInput', 'pinnedList', 'foldersList', 'noteEditor', 'noteTitle',
+      'folderSelect', 'pinBtn', 'deleteNoteBtn', 'exportBtn', 'importBtn', 'importFile',
+      'darkModeToggle', 'emptyState', 'editorContainer', 'noteContent', 'previewContent',
+      'boldBtn', 'italicBtn', 'underlineBtn', 'colorPicker', 'applyColorBtn', 'h1Btn', 'h2Btn',
+      'h3Btn', 'ulBtn', 'olBtn', 'codeBtn', 'linkBtn'
+    ].forEach((id) => { elements[id] = $(id); });
   }
 
+  /* Storage */
   function saveData() {
-    localStorage.setItem('notionCloneData', JSON.stringify(data));
+    localStorage.setItem(storageKey, JSON.stringify(data));
   }
 
   function loadData() {
-    const saved = localStorage.getItem('notionCloneData');
-    if (saved) {
-      try {
-        data = JSON.parse(saved);
-      } catch(e) {
-        console.error('Failed to parse saved data', e);
-      }
-    }
-  }
-
-  // ---------- Markdown Parser (Simplified + color/underline) ----------
-  function parseMarkdown(text) {
-    if (!text) return '';
-    const lines = text.split('\n');
-    let html = '';
-    let inCodeBlock = false;
-    let codeBlockContent = '';
-
-    for (let i = 0; i < lines.length; i++) {
-      let line = lines[i];
-
-      // Code block
-      if (line.trim().startsWith('```')) {
-        if (!inCodeBlock) {
-          inCodeBlock = true;
-          codeBlockContent = '';
-          continue;
-        } else {
-          html += `<pre><code>${escapeHtml(codeBlockContent)}</code></pre>`;
-          inCodeBlock = false;
-          continue;
-        }
-      }
-
-      if (inCodeBlock) {
-        codeBlockContent += (codeBlockContent ? '\n' : '') + line;
-        continue;
-      }
-
-      // Headings
-      if (line.trim().startsWith('## ')) {
-        html += `<h2>${parseInline(line.trim().substring(3))}</h2>`;
-        continue;
-      }
-      if (line.trim().startsWith('# ')) {
-        html += `<h1>${parseInline(line.trim().substring(2))}</h1>`;
-        continue;
-      }
-
-      // Unordered list
-      if (/^[\s]*[-*]\s/.test(line)) {
-        const indent = line.match(/^(\s*)/)[1].length;
-        if (indent === 0) html += '<ul>';
-        html += `<li>${parseInline(line.replace(/^[\s]*[-*]\s/, ''))}</li>`;
-        if (i+1 >= lines.length || !/^[\s]*[-*]\s/.test(lines[i+1])) {
-          html += '</ul>';
-        }
-        continue;
-      }
-
-      // Ordered list
-      if (/^[\s]*\d+\.\s/.test(line)) {
-        const indent = line.match(/^(\s*)/)[1].length;
-        if (indent === 0) html += '<ol>';
-        html += `<li>${parseInline(line.replace(/^[\s]*\d+\.\s/, ''))}</li>`;
-        if (i+1 >= lines.length || !/^[\s]*\d+\.\s/.test(lines[i+1])) {
-          html += '</ol>';
-        }
-        continue;
-      }
-
-      // Empty line
-      if (line.trim() === '') {
-        html += '<br>';
-        continue;
-      }
-
-      // Default paragraph
-      html += `<p>${parseInline(line)}</p>`;
-    }
-
-    if (inCodeBlock) {
-      html += `<pre><code>${escapeHtml(codeBlockContent)}</code></pre>`;
-    }
-
-    return html;
-  }
-
-  function parseInline(text) {
-    let escaped = escapeHtml(text);
-
-    // 1. Color syntax: {color:red}text{/color}
-    escaped = escaped.replace(/\{color:([^}]+)\}(.*?)\{\/color\}/g, (match, color, inner) => {
-      const safeColor = sanitizeColorValue(color);
-      return `<span style="color:${safeColor};">${parseInline(inner)}</span>`;
-    });
-
-    // 2. Underline: ++text++
-    escaped = escaped.replace(/\+\+(.*?)\+\+/g, '<u>$1</u>');
-
-    // Bold ** or __
-    escaped = escaped.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-    escaped = escaped.replace(/__(.*?)__/g, '<strong>$1</strong>');
-    // Italic * or _
-    escaped = escaped.replace(/(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
-    escaped = escaped.replace(/(?<!_)_(?!_)(.*?)(?<!_)_(?!_)/g, '<em>$1</em>');
-    // Inline code
-    escaped = escaped.replace(/`(.*?)`/g, '<code>$1</code>');
-    // Links [text](url)
-    escaped = escaped.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, url) => {
-      const safeUrl = sanitizeUrl(url);
-      if (!safeUrl) return label;
-      return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${label}</a>`;
-    });
-    
-    return escaped;
-  }
-
-
-
-  function sanitizeColorValue(color) {
-    const raw = String(color || '').trim();
-    if (/^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(raw)) return raw;
-    if (/^(rgb|hsl)a?\(\s*[\d.%\s,]+\)$/i.test(raw)) return raw;
-    if (/^[a-zA-Z]{3,20}$/.test(raw)) return raw;
-    return 'inherit';
-  }
-
-  function sanitizeUrl(url) {
-    const raw = String(url || '').trim();
-    if (!raw) return null;
     try {
-      const parsed = new URL(raw, window.location.origin);
-      const allowedProtocols = ['http:', 'https:', 'mailto:', 'tel:'];
-      if (!allowedProtocols.includes(parsed.protocol)) return null;
-      return escapeHtml(parsed.href);
-    } catch (e) {
-      return null;
+      const saved = localStorage.getItem(storageKey);
+      data = saved ? JSON.parse(saved) : { folders: [] };
+    } catch (_) {
+      data = { folders: [] };
     }
+
+    if (!data || !Array.isArray(data.folders)) {
+      data = { folders: [] };
+    }
+
+    data.folders.forEach((folder) => {
+      if (!Array.isArray(folder.notes)) folder.notes = [];
+      folder.notes.forEach((note) => {
+        note.folderId = folder.id;
+        note.title = note.title || 'بدون عنوان';
+        note.content = note.content || '';
+        note.pinned = Boolean(note.pinned);
+        note.createdAt = note.createdAt || new Date().toISOString();
+        note.updatedAt = note.updatedAt || note.createdAt;
+      });
+    });
   }
 
-  function escapeHtml(text) {
-    return text
+  function createDefaultData() {
+    if (data.folders.length > 0) return;
+
+    const folderId = generateId();
+    const noteId = generateId();
+    const now = new Date().toISOString();
+
+    data.folders.push({
+      id: folderId,
+      name: 'عمومی',
+      notes: [{
+        id: noteId,
+        title: 'خوش آمدید!',
+        content: '# سلام\nاین یک **یادداشت** نمونه است.\n\n## امکانات\n- ساخت یادداشت\n- پوشه‌بندی\n- جستجو و مرتب‌سازی\n- خروجی و ورودی JSON\n\n[لینک نمونه](https://example.com) و `کد کوتاه`\n',
+        folderId,
+        pinned: false,
+        createdAt: now,
+        updatedAt: now
+      }]
+    });
+
+    saveData();
+  }
+
+  /* Helpers */
+  function generateId() {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
+  }
+
+  function escapeHtml(value) {
+    return String(value)
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
   }
 
+  function normalizeText(value) {
+    return String(value || '').trim();
+  }
 
-
-  function isValidImportedData(imported) {
-    if (!imported || typeof imported !== 'object' || !Array.isArray(imported.folders)) {
-      return false;
+  function formatDate(value) {
+    try {
+      return new Intl.DateTimeFormat('fa-IR', { month: 'short', day: 'numeric' }).format(new Date(value));
+    } catch (_) {
+      return '';
     }
-
-    return imported.folders.every(isValidFolder);
   }
 
-  function isValidFolder(folder) {
-    if (!folder || typeof folder !== 'object') return false;
-    if (typeof folder.id !== 'string' || typeof folder.name !== 'string') return false;
-    if (!Array.isArray(folder.notes)) return false;
-    return folder.notes.every(note => isValidNote(note, folder.id));
+  function getFolderById(id) {
+    return data.folders.find((folder) => folder.id === id) || null;
   }
 
-  function isValidNote(note, folderId) {
-    if (!note || typeof note !== 'object') return false;
-    const requiredStrings = ['id', 'title', 'content', 'folderId', 'createdAt', 'updatedAt'];
-    for (const key of requiredStrings) {
-      if (typeof note[key] !== 'string') return false;
-    }
-    if (typeof note.pinned !== 'boolean') return false;
-    if (note.folderId !== folderId) return false;
-    if (Number.isNaN(Date.parse(note.createdAt)) || Number.isNaN(Date.parse(note.updatedAt))) {
-      return false;
-    }
-    return true;
-  }
-
-  // ---------- Note & Folder Operations ----------
   function getNoteById(id) {
     for (const folder of data.folders) {
-      const note = folder.notes.find(n => n.id === id);
+      const note = folder.notes.find((item) => item.id === id);
       if (note) return note;
     }
     return null;
   }
 
-  function getFolderById(id) {
-    return data.folders.find(f => f.id === id);
+  function getAllNotes() {
+    return data.folders.flatMap((folder) => folder.notes.map((note) => ({ ...note, folderName: folder.name })));
   }
 
-  function createNote(folderId = null) {
+  function getVisibleNotes() {
+    const query = searchQuery.toLowerCase();
+    const notes = getAllNotes().filter((note) => {
+      if (!query) return true;
+      return note.title.toLowerCase().includes(query) || note.content.toLowerCase().includes(query);
+    });
+
+    notes.sort((a, b) => {
+      if (sortMode === 'updated') return new Date(b.updatedAt) - new Date(a.updatedAt);
+      if (sortMode === 'created') return new Date(b.createdAt) - new Date(a.createdAt);
+      return a.title.localeCompare(b.title, 'fa');
+    });
+
+    return notes;
+  }
+
+  function ensureFolder() {
+    if (data.folders.length) return data.folders[0].id;
     const id = generateId();
+    data.folders.push({ id, name: 'عمومی', notes: [] });
+    return id;
+  }
+
+  /* Markdown */
+  function parseMarkdown(text) {
+    const lines = String(text || '').split('\n');
+    let html = '';
+    let inCodeBlock = false;
+    let codeBlock = [];
+    let listType = null;
+
+    function closeList() {
+      if (listType) {
+        html += `</${listType}>`;
+        listType = null;
+      }
+    }
+
+    for (const rawLine of lines) {
+      const line = rawLine.replace(/\r$/, '');
+      const trimmed = line.trim();
+
+      if (trimmed.startsWith('```')) {
+        closeList();
+        if (inCodeBlock) {
+          html += `<pre><code>${escapeHtml(codeBlock.join('\n'))}</code></pre>`;
+          codeBlock = [];
+          inCodeBlock = false;
+        } else {
+          inCodeBlock = true;
+        }
+        continue;
+      }
+
+      if (inCodeBlock) {
+        codeBlock.push(line);
+        continue;
+      }
+
+      if (!trimmed) {
+        closeList();
+        html += '<br>';
+        continue;
+      }
+
+      const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+      if (heading) {
+        closeList();
+        const level = heading[1].length;
+        html += `<h${level}>${parseInline(heading[2])}</h${level}>`;
+        continue;
+      }
+
+      const quote = trimmed.match(/^>\s+(.+)$/);
+      if (quote) {
+        closeList();
+        html += `<blockquote>${parseInline(quote[1])}</blockquote>`;
+        continue;
+      }
+
+      const unordered = trimmed.match(/^[-*]\s+(.+)$/);
+      if (unordered) {
+        if (listType !== 'ul') {
+          closeList();
+          html += '<ul>';
+          listType = 'ul';
+        }
+        html += `<li>${parseInline(unordered[1])}</li>`;
+        continue;
+      }
+
+      const ordered = trimmed.match(/^\d+\.\s+(.+)$/);
+      if (ordered) {
+        if (listType !== 'ol') {
+          closeList();
+          html += '<ol>';
+          listType = 'ol';
+        }
+        html += `<li>${parseInline(ordered[1])}</li>`;
+        continue;
+      }
+
+      closeList();
+      html += `<p>${parseInline(line)}</p>`;
+    }
+
+    closeList();
+    if (inCodeBlock) html += `<pre><code>${escapeHtml(codeBlock.join('\n'))}</code></pre>`;
+    return html;
+  }
+
+  function parseInline(text) {
+    const tokens = [];
+    let safe = escapeHtml(text);
+
+    safe = safe.replace(/`([^`]+)`/g, (_, code) => {
+      tokens.push(`<code>${code}</code>`);
+      return `\u0000${tokens.length - 1}\u0000`;
+    });
+
+    safe = safe.replace(/\[([^\]]+)]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    safe = safe.replace(/\{color:(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)\}(.+?)\{\/color\}/g, '<span style="color:$1">$2</span>');
+    safe = safe.replace(/\+\+(.+?)\+\+/g, '<u>$1</u>');
+    safe = safe.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    safe = safe.replace(/__(.+?)__/g, '<strong>$1</strong>');
+    safe = safe.replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>');
+    safe = safe.replace(/(^|[^_])_([^_]+)_/g, '$1<em>$2</em>');
+
+    return safe.replace(/\u0000(\d+)\u0000/g, (_, index) => tokens[Number(index)] || '');
+  }
+
+  /* Notes and folders */
+  function createNote(folderId) {
+    const targetFolderId = folderId || (currentNoteId ? getNoteById(currentNoteId)?.folderId : null) || ensureFolder();
+    const folder = getFolderById(targetFolderId) || getFolderById(ensureFolder());
     const now = new Date().toISOString();
     const note = {
-      id,
+      id: generateId(),
       title: 'یادداشت جدید',
       content: '',
-      folderId: folderId || (data.folders.length ? data.folders[0].id : null),
+      folderId: folder.id,
       pinned: false,
       createdAt: now,
       updatedAt: now
     };
 
-    if (!note.folderId && data.folders.length === 0) {
-      const defaultFolderId = generateId();
-      data.folders.push({ id: defaultFolderId, name: 'عمومی', notes: [] });
-      note.folderId = defaultFolderId;
-    }
-
-    const folder = getFolderById(note.folderId);
-    if (folder) {
-      folder.notes.push(note);
-      saveData();
-      selectNote(id);
-    }
+    folder.notes.push(note);
+    saveData();
+    selectNote(note.id);
   }
 
   function deleteNote(id) {
-    for (const folder of data.folders) {
-      folder.notes = folder.notes.filter(n => n.id !== id);
-    }
-    if (currentNoteId === id) {
-      currentNoteId = null;
-      showEmptyState();
-    }
+    data.folders.forEach((folder) => {
+      folder.notes = folder.notes.filter((note) => note.id !== id);
+    });
+    if (currentNoteId === id) currentNoteId = null;
     saveData();
     render();
   }
 
   function togglePinNote(id) {
     const note = getNoteById(id);
-    if (note) {
-      note.pinned = !note.pinned;
-      saveData();
-      render();
-    }
+    if (!note) return;
+    note.pinned = !note.pinned;
+    note.updatedAt = new Date().toISOString();
+    saveData();
+    updatePinButton();
+    renderSidebar();
   }
 
   function moveNoteToFolder(noteId, targetFolderId) {
-    const note = getNoteById(noteId);
-    if (!note) return;
-    for (const folder of data.folders) {
-      folder.notes = folder.notes.filter(n => n.id !== noteId);
-    }
     const targetFolder = getFolderById(targetFolderId);
-    if (targetFolder) {
-      note.folderId = targetFolderId;
-      targetFolder.notes.push(note);
-    }
+    const note = getNoteById(noteId);
+    if (!targetFolder || !note || note.folderId === targetFolderId) return;
+
+    data.folders.forEach((folder) => {
+      folder.notes = folder.notes.filter((item) => item.id !== noteId);
+    });
+
+    note.folderId = targetFolderId;
+    note.updatedAt = new Date().toISOString();
+    targetFolder.notes.push(note);
     saveData();
-    render();
+    renderSidebar();
   }
 
   function createFolder() {
-    const name = prompt('نام پوشه جدید:');
+    const name = normalizeText(prompt('نام پوشه جدید:'));
     if (!name) return;
-    const id = generateId();
-    data.folders.push({ id, name, notes: [] });
+    data.folders.push({ id: generateId(), name, notes: [] });
     saveData();
-    render();
+    renderSidebar();
+    updateFolderSelect();
   }
 
   function renameFolder(id) {
     const folder = getFolderById(id);
     if (!folder) return;
-    const newName = prompt('نام جدید پوشه:', folder.name);
-    if (newName && newName.trim() !== '') {
-      folder.name = newName;
-      saveData();
-      render();
-    }
+    const name = normalizeText(prompt('نام جدید پوشه:', folder.name));
+    if (!name) return;
+    folder.name = name;
+    saveData();
+    renderSidebar();
+    updateFolderSelect();
   }
 
   function deleteFolder(id) {
+    const folder = getFolderById(id);
+    if (!folder) return;
     if (!confirm('آیا از حذف این پوشه و تمام یادداشت‌های آن مطمئن هستید؟')) return;
-    data.folders = data.folders.filter(f => f.id !== id);
-    if (currentNoteId && !getNoteById(currentNoteId)) {
-      currentNoteId = null;
-      showEmptyState();
-    }
+
+    const deletedCurrentNote = folder.notes.some((note) => note.id === currentNoteId);
+    data.folders = data.folders.filter((item) => item.id !== id);
+    if (!data.folders.length) ensureFolder();
+    if (deletedCurrentNote) currentNoteId = null;
     saveData();
     render();
   }
 
-  // ---------- Rendering ----------
+  /* Rendering */
   function render() {
     renderSidebar();
-    renderEditor();
+    if (currentNoteId && getNoteById(currentNoteId)) renderEditor();
+    else showEmptyState();
   }
 
   function renderSidebar() {
-    const pinnedList = document.getElementById('pinnedList');
-    const foldersList = document.getElementById('foldersList');
+    const notes = getVisibleNotes();
+    const pinned = notes.filter((note) => note.pinned);
+    const unpinned = notes.filter((note) => !note.pinned);
 
-    let allNotes = [];
-    for (const folder of data.folders) {
-      allNotes.push(...folder.notes.map(n => ({...n, folderName: folder.name})));
-    }
+    elements.pinnedList.innerHTML = pinned.length
+      ? pinned.map(renderNoteItem).join('')
+      : '<div class="empty-list">یادداشت پین‌شده‌ای وجود ندارد.</div>';
 
-    if (searchQuery.trim()) {
-      const query = searchQuery.trim().toLowerCase();
-      allNotes = allNotes.filter(n => n.title.toLowerCase().includes(query) || n.content.toLowerCase().includes(query));
-    }
-
-    if (sortMode === 'title') {
-      allNotes.sort((a, b) => a.title.localeCompare(b.title, 'fa'));
-    } else {
-      allNotes.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-    }
-
-    const pinnedNotes = allNotes.filter(n => n.pinned);
-    const unpinnedNotes = allNotes.filter(n => !n.pinned);
-
-    pinnedList.innerHTML = pinnedNotes.map(note => `
-      <div class="note-item ${currentNoteId === note.id ? 'active' : ''}" data-id="${note.id}">
-        <span class="pin-icon">📌</span>
-        <span class="note-title" title="${escapeHtml(note.title)}">${escapeHtml(note.title)}</span>
-        <button class="icon-btn unpin-btn" data-id="${note.id}" title="برداشتن پین">✕</button>
-      </div>
-    `).join('');
-
-    let html = '';
-    for (const folder of data.folders) {
-      const folderNotes = unpinnedNotes.filter(n => n.folderId === folder.id);
-      html += `
+    elements.foldersList.innerHTML = data.folders.map((folder) => {
+      const folderNotes = unpinned.filter((note) => note.folderId === folder.id);
+      return `
         <div class="folder-item" data-folder-id="${folder.id}">
-          <div class="folder-name">
-            <span>📁</span> <span class="note-title">${escapeHtml(folder.name)}</span>
-          </div>
+          <div class="folder-name"><span>📁</span><span class="note-title">${escapeHtml(folder.name)}</span></div>
           <div class="folder-actions">
-            <button class="icon-btn rename-folder-btn" data-id="${folder.id}">✏️</button>
-            <button class="icon-btn delete-folder-btn" data-id="${folder.id}">🗑</button>
+            <button class="icon-btn rename-folder-btn" data-id="${folder.id}" type="button" title="تغییر نام">✏️</button>
+            <button class="icon-btn delete-folder-btn" data-id="${folder.id}" type="button" title="حذف">🗑</button>
           </div>
         </div>
+        ${folderNotes.length ? folderNotes.map(renderNoteItem).join('') : '<div class="empty-list">یادداشتی در این پوشه نیست.</div>'}
       `;
-      html += folderNotes.map(note => `
-        <div class="note-item ${currentNoteId === note.id ? 'active' : ''}" data-id="${note.id}" style="padding-right: 24px;">
-          <span class="note-title" title="${escapeHtml(note.title)}">${escapeHtml(note.title)}</span>
-          ${note.pinned ? '<span class="pin-icon">📌</span>' : ''}
-        </div>
-      `).join('');
-    }
-
-    foldersList.innerHTML = html;
-
-    document.getElementById('sidebar').onclick = function(e) {
-      const noteItem = e.target.closest('.note-item');
-      if (noteItem && !e.target.closest('button')) {
-        const id = noteItem.dataset.id;
-        selectNote(id);
-        return;
-      }
-      const pinBtn = e.target.closest('.unpin-btn');
-      if (pinBtn) {
-        e.stopPropagation();
-        togglePinNote(pinBtn.dataset.id);
-        return;
-      }
-      const renameBtn = e.target.closest('.rename-folder-btn');
-      if (renameBtn) {
-        e.stopPropagation();
-        renameFolder(renameBtn.dataset.id);
-        return;
-      }
-      const deleteBtn = e.target.closest('.delete-folder-btn');
-      if (deleteBtn) {
-        e.stopPropagation();
-        deleteFolder(deleteBtn.dataset.id);
-        return;
-      }
-    };
+    }).join('');
   }
 
-  function selectNote(id) {
-    currentNoteId = id;
-    const note = getNoteById(id);
-    if (note) {
-      document.getElementById('noteEditor').style.display = 'flex';
-      document.getElementById('editorContainer').style.display = 'flex';
-      document.getElementById('emptyState').style.display = 'none';
-      document.getElementById('noteTitle').value = note.title;
-      document.getElementById('noteContent').value = note.content;
-      updateFolderSelect(note.folderId);
-      updatePreview();
-    }
-    renderSidebar();
-  }
-
-  function showEmptyState() {
-    document.getElementById('noteEditor').style.display = 'none';
-    document.getElementById('editorContainer').style.display = 'none';
-    document.getElementById('emptyState').style.display = 'flex';
-    currentNoteId = null;
-    renderSidebar();
-  }
-
-  function updatePreview() {
-    const content = document.getElementById('noteContent').value;
-    const html = parseMarkdown(content);
-    document.getElementById('previewContent').innerHTML = html;
-  }
-
-  function updateFolderSelect(currentFolderId) {
-    const select = document.getElementById('folderSelect');
-    select.innerHTML = data.folders.map(f => `<option value="${f.id}" ${f.id === currentFolderId ? 'selected' : ''}>${escapeHtml(f.name)}</option>`).join('');
+  function renderNoteItem(note) {
+    return `
+      <div class="note-item ${currentNoteId === note.id ? 'active' : ''}" data-id="${note.id}" title="${escapeHtml(note.title)}">
+        ${note.pinned ? '<span class="pin-icon">📌</span>' : '<span>📝</span>'}
+        <span class="note-title">${escapeHtml(note.title || 'بدون عنوان')}</span>
+        <span class="note-meta">${formatDate(note.updatedAt)}</span>
+      </div>
+    `;
   }
 
   function renderEditor() {
-    if (!currentNoteId) {
-      showEmptyState();
-      return;
-    }
     const note = getNoteById(currentNoteId);
-    if (!note) {
-      showEmptyState();
-      return;
-    }
-    document.getElementById('noteTitle').value = note.title;
-    document.getElementById('noteContent').value = note.content;
-    updateFolderSelect(note.folderId);
+    if (!note) return showEmptyState();
+
+    elements.noteEditor.hidden = false;
+    elements.editorContainer.hidden = false;
+    elements.emptyState.style.display = 'none';
+    elements.noteTitle.value = note.title;
+    elements.noteContent.value = note.content;
+    updateFolderSelect();
+    updatePinButton();
     updatePreview();
   }
 
-  // ---------- Auto-save ----------
-  let saveTimeout;
+  function showEmptyState() {
+    elements.noteEditor.hidden = true;
+    elements.editorContainer.hidden = true;
+    elements.emptyState.style.display = 'flex';
+  }
+
+  function selectNote(id) {
+    if (!getNoteById(id)) return;
+    currentNoteId = id;
+    renderEditor();
+    renderSidebar();
+    closeSidebar();
+  }
+
+  function updateFolderSelect() {
+    const note = currentNoteId ? getNoteById(currentNoteId) : null;
+    elements.folderSelect.innerHTML = data.folders.map((folder) => (
+      `<option value="${folder.id}" ${note && note.folderId === folder.id ? 'selected' : ''}>${escapeHtml(folder.name)}</option>`
+    )).join('');
+  }
+
+  function updatePinButton() {
+    const note = currentNoteId ? getNoteById(currentNoteId) : null;
+    elements.pinBtn.textContent = note && note.pinned ? '📌 حذف پین' : '📌 پین';
+  }
+
+  function updatePreview() {
+    elements.previewContent.innerHTML = parseMarkdown(elements.noteContent.value);
+  }
+
+  /* Auto save */
   function autoSave() {
-    clearTimeout(saveTimeout);
-    saveTimeout = setTimeout(() => {
-      if (currentNoteId) {
-        const note = getNoteById(currentNoteId);
-        if (note) {
-          note.title = document.getElementById('noteTitle').value.trim() || 'بدون عنوان';
-          note.content = document.getElementById('noteContent').value;
-          note.updatedAt = new Date().toISOString();
-          saveData();
-          const newFolderId = document.getElementById('folderSelect').value;
-          if (newFolderId !== note.folderId) {
-            moveNoteToFolder(currentNoteId, newFolderId);
-          }
-        }
-      }
-      render();
-    }, 500);
-  }
-
-  // ---------- Formatting helpers ----------
-  const textarea = () => document.getElementById('noteContent');
-
-  // برای دکمه‌های inline (Bold, Italic, ...)
-  function insertInlineMarker(prefix, suffix) {
-    const ta = textarea();
-    const start = ta.selectionStart;
-    const end = ta.selectionEnd;
-    const selectedText = ta.value.substring(start, end);
-    const replacement = prefix + (selectedText || 'متن نمونه') + suffix;
-    ta.value = ta.value.substring(0, start) + replacement + ta.value.substring(end);
-    ta.focus();
-    ta.setSelectionRange(start + prefix.length, start + prefix.length + (selectedText || 'متن نمونه').length);
-    autoSave();
-    updatePreview();
-  }
-
-  // برای دکمه‌های block (سرتیتر، لیست)
-  function insertBlockMarker(prefix) {
-    const ta = textarea();
-    const start = ta.selectionStart;
-    const end = ta.selectionEnd;
-
-    // اگر متنی انتخاب شده باشد، هر خط از انتخاب را با prefix آغاز می‌کنیم
-    if (start !== end) {
-      const selectedText = ta.value.substring(start, end);
-      const lines = selectedText.split('\n');
-      const newLines = lines.map(line => {
-        // اگر خط قبلاً با همان prefix شروع شده بود، اضافه نمی‌کنیم (اختیاری)
-        if (line.startsWith(prefix)) return line;
-        return prefix + line;
-      });
-      const replacement = newLines.join('\n');
-      ta.value = ta.value.substring(0, start) + replacement + ta.value.substring(end);
-      ta.focus();
-      ta.setSelectionRange(start, start + replacement.length);
-    } else {
-      // هیچ انتخابی نیست: کل خط فعلی را پیدا کرده و prefix را در ابتدای آن قرار می‌دهیم
-      const beforeCursor = ta.value.substring(0, start);
-      const afterCursor = ta.value.substring(start);
-      const lineStart = beforeCursor.lastIndexOf('\n') + 1;
-      const lineEnd = afterCursor.indexOf('\n');
-      const currentLine = lineEnd === -1 ? afterCursor : afterCursor.substring(0, lineEnd);
-      const newLine = prefix + currentLine;
-      ta.value = beforeCursor.substring(0, lineStart) + newLine + (lineEnd === -1 ? '' : afterCursor.substring(lineEnd));
-      ta.focus();
-      const newCursorPos = lineStart + newLine.length;
-      ta.setSelectionRange(newCursorPos, newCursorPos);
-    }
-    autoSave();
-    updatePreview();
-  }
-
-  // ---------- Event Listeners ----------
-  function init() {
-    loadData();
-    if (data.folders.length === 0) {
-      const folderId = generateId();
-      data.folders.push({ id: folderId, name: 'عمومی', notes: [] });
-      const noteId = generateId();
-      const note = {
-        id: noteId,
-        title: 'خوش آمدید!',
-        content: '# سلام\nاین یک **یادداشت** نمونه با رنگ‌های {color:red}قرمز{/color} و ++زیرخط‌دار++ است.\n',
-        folderId: folderId,
-        pinned: false,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      data.folders[0].notes.push(note);
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      const note = currentNoteId ? getNoteById(currentNoteId) : null;
+      if (!note) return;
+      note.title = normalizeText(elements.noteTitle.value) || 'بدون عنوان';
+      note.content = elements.noteContent.value;
+      note.updatedAt = new Date().toISOString();
       saveData();
-    }
+      renderSidebar();
+    }, 250);
+  }
 
-    render();
-    showEmptyState();
+  /* Formatting */
+  function insertText(prefix, suffix, fallback) {
+    const textarea = elements.noteContent;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const selected = textarea.value.slice(start, end) || fallback;
+    const replacement = `${prefix}${selected}${suffix}`;
 
-    // Sidebar toggle
-    document.getElementById('openSidebarBtn').addEventListener('click', () => {
-      document.getElementById('sidebar').classList.add('open');
+    textarea.value = textarea.value.slice(0, start) + replacement + textarea.value.slice(end);
+    textarea.focus();
+    textarea.setSelectionRange(start + prefix.length, start + prefix.length + selected.length);
+    updatePreview();
+    autoSave();
+  }
+
+  function insertLinePrefix(prefix) {
+    const textarea = elements.noteContent;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const value = textarea.value;
+    const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+    const lineEndIndex = value.indexOf('\n', end);
+    const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+    const selectedBlock = value.slice(lineStart, lineEnd);
+    const replacement = selectedBlock.split('\n').map((line) => line.startsWith(prefix) ? line : prefix + line).join('\n');
+
+    textarea.value = value.slice(0, lineStart) + replacement + value.slice(lineEnd);
+    textarea.focus();
+    textarea.setSelectionRange(lineStart, lineStart + replacement.length);
+    updatePreview();
+    autoSave();
+  }
+
+  /* Import export */
+  function exportJson() {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'notion-clone-data.json';
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function importJson(file) {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const imported = JSON.parse(event.target.result);
+        if (!imported || !Array.isArray(imported.folders)) throw new Error('Invalid file');
+        data = imported;
+        currentNoteId = null;
+        saveData();
+        loadData();
+        createDefaultData();
+        render();
+        alert('داده‌ها با موفقیت وارد شدند.');
+      } catch (_) {
+        alert('فرمت فایل JSON معتبر نیست.');
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  /* Responsive */
+  function openSidebar() {
+    elements.sidebar.classList.add('open');
+    elements.sidebarOverlay.classList.add('show');
+  }
+
+  function closeSidebar() {
+    elements.sidebar.classList.remove('open');
+    elements.sidebarOverlay.classList.remove('show');
+  }
+
+  /* Events */
+  function bindEvents() {
+    elements.openSidebarBtn.addEventListener('click', openSidebar);
+    elements.closeSidebarBtn.addEventListener('click', closeSidebar);
+    elements.sidebarOverlay.addEventListener('click', closeSidebar);
+
+    elements.newNoteBtn.addEventListener('click', () => createNote());
+    elements.newFolderBtn.addEventListener('click', createFolder);
+    elements.sortSelect.addEventListener('change', (event) => {
+      sortMode = event.target.value;
+      renderSidebar();
     });
-    document.getElementById('closeSidebarBtn').addEventListener('click', () => {
-      document.getElementById('sidebar').classList.remove('open');
+    elements.searchInput.addEventListener('input', (event) => {
+      searchQuery = event.target.value.trim();
+      renderSidebar();
     });
 
-    document.getElementById('newNoteBtn').addEventListener('click', () => {
-      const currentFolderId = currentNoteId ? getNoteById(currentNoteId)?.folderId : null;
-      createNote(currentFolderId);
-    });
-    document.getElementById('newFolderBtn').addEventListener('click', createFolder);
+    elements.sidebar.addEventListener('click', (event) => {
+      const renameButton = event.target.closest('.rename-folder-btn');
+      const deleteButton = event.target.closest('.delete-folder-btn');
+      const noteItem = event.target.closest('.note-item');
 
-    document.getElementById('searchInput').addEventListener('input', (e) => {
-      searchQuery = e.target.value;
-      render();
-    });
-
-    document.getElementById('sortSelect').addEventListener('change', (e) => {
-      sortMode = e.target.value;
-      render();
+      if (renameButton) return renameFolder(renameButton.dataset.id);
+      if (deleteButton) return deleteFolder(deleteButton.dataset.id);
+      if (noteItem) return selectNote(noteItem.dataset.id);
     });
 
-    document.getElementById('noteTitle').addEventListener('input', autoSave);
-    document.getElementById('noteContent').addEventListener('input', () => {
+    elements.noteTitle.addEventListener('input', autoSave);
+    elements.noteContent.addEventListener('input', () => {
       updatePreview();
       autoSave();
     });
-
-    document.getElementById('folderSelect').addEventListener('change', (e) => {
-      const newFolderId = e.target.value;
-      if (currentNoteId) {
-        moveNoteToFolder(currentNoteId, newFolderId);
-      }
-      autoSave();
+    elements.folderSelect.addEventListener('change', (event) => moveNoteToFolder(currentNoteId, event.target.value));
+    elements.pinBtn.addEventListener('click', () => togglePinNote(currentNoteId));
+    elements.deleteNoteBtn.addEventListener('click', () => {
+      if (currentNoteId && confirm('آیا از حذف این یادداشت مطمئن هستید؟')) deleteNote(currentNoteId);
     });
 
-    document.getElementById('pinBtn').addEventListener('click', () => {
-      if (currentNoteId) {
-        togglePinNote(currentNoteId);
-        render();
-      }
+    elements.exportBtn.addEventListener('click', exportJson);
+    elements.importBtn.addEventListener('click', () => elements.importFile.click());
+    elements.importFile.addEventListener('change', (event) => {
+      const file = event.target.files[0];
+      if (file) importJson(file);
+      event.target.value = '';
     });
 
-    document.getElementById('deleteNoteBtn').addEventListener('click', () => {
-      if (currentNoteId && confirm('آیا از حذف این یادداشت مطمئن هستید؟')) {
-        deleteNote(currentNoteId);
-      }
+    elements.darkModeToggle.addEventListener('click', () => {
+      const enabled = !document.body.classList.contains('dark');
+      document.body.classList.toggle('dark', enabled);
+      localStorage.setItem(darkModeKey, enabled ? '1' : '0');
     });
 
-    document.getElementById('exportBtn').addEventListener('click', () => {
-      const json = JSON.stringify(data, null, 2);
-      const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'notion-clone-data.json';
-      a.click();
-      URL.revokeObjectURL(url);
-    });
+    elements.boldBtn.addEventListener('click', () => insertText('**', '**', 'متن ضخیم'));
+    elements.italicBtn.addEventListener('click', () => insertText('*', '*', 'متن کج'));
+    elements.underlineBtn.addEventListener('click', () => insertText('++', '++', 'متن زیرخط‌دار'));
+    elements.applyColorBtn.addEventListener('click', () => insertText(`{color:${elements.colorPicker.value}}`, '{/color}', 'متن رنگی'));
+    elements.h1Btn.addEventListener('click', () => insertLinePrefix('# '));
+    elements.h2Btn.addEventListener('click', () => insertLinePrefix('## '));
+    elements.h3Btn.addEventListener('click', () => insertLinePrefix('### '));
+    elements.ulBtn.addEventListener('click', () => insertLinePrefix('- '));
+    elements.olBtn.addEventListener('click', () => insertLinePrefix('1. '));
+    elements.codeBtn.addEventListener('click', () => insertText('`', '`', 'code'));
+    elements.linkBtn.addEventListener('click', () => insertText('[', '](https://example.com)', 'متن لینک'));
+  }
 
-    document.getElementById('importBtn').addEventListener('click', () => {
-      document.getElementById('importFile').click();
-    });
-    document.getElementById('importFile').addEventListener('change', (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        try {
-          const imported = JSON.parse(ev.target.result);
-          if (isValidImportedData(imported)) {
-            data = imported;
-            saveData();
-            currentNoteId = null;
-            showEmptyState();
-            render();
-            alert('داده‌ها با موفقیت وارد شدند.');
-          } else {
-            alert('فرمت فایل معتبر نیست.');
-          }
-        } catch (err) {
-          alert('خطا در خواندن فایل JSON.');
-        }
-      };
-      reader.readAsText(file);
-      e.target.value = '';
-    });
+  /* Init */
+  function init() {
+    cacheElements();
+    loadData();
+    createDefaultData();
+    bindEvents();
 
-    document.getElementById('darkModeToggle').addEventListener('click', () => {
-      darkMode = !darkMode;
-      document.body.classList.toggle('dark', darkMode);
-      localStorage.setItem('darkMode', darkMode ? '1' : '0');
-    });
-
-    if (localStorage.getItem('darkMode') === '1') {
-      darkMode = true;
+    if (localStorage.getItem(darkModeKey) === '1') {
       document.body.classList.add('dark');
     }
 
-    // ---------- دکمه‌های قالب‌بندی ----------
-    document.getElementById('boldBtn').addEventListener('click', () => insertInlineMarker('**', '**'));
-    document.getElementById('italicBtn').addEventListener('click', () => insertInlineMarker('*', '*'));
-    document.getElementById('underlineBtn').addEventListener('click', () => insertInlineMarker('++', '++'));
-    document.getElementById('applyColorBtn').addEventListener('click', () => {
-      const color = document.getElementById('colorPicker').value;
-      insertInlineMarker(`{color:${color}}`, '{/color}');
-    });
-    document.getElementById('h1Btn').addEventListener('click', () => insertBlockMarker('# '));
-    document.getElementById('h2Btn').addEventListener('click', () => insertBlockMarker('## '));
-    document.getElementById('ulBtn').addEventListener('click', () => insertBlockMarker('- '));
-    document.getElementById('olBtn').addEventListener('click', () => insertBlockMarker('1. '));
-
-    // Responsive sidebar close on note select
-    const mediaQuery = window.matchMedia('(max-width: 768px)');
-    const sidebarEl = document.getElementById('sidebar');
-    document.querySelector('.app-container').addEventListener('click', function(e) {
-      if (e.target.closest('.note-item') && mediaQuery.matches) {
-        sidebarEl.classList.remove('open');
-      }
-    });
-
     render();
-    showEmptyState();
   }
 
-  window.addEventListener('load', init);
-})();
+  window.addEventListener('DOMContentLoaded', init);
+}());
